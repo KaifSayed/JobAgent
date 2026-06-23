@@ -2,6 +2,9 @@
 
 import { revalidatePath } from "next/cache";
 import OpenAI from "openai";
+
+// Use Google GenAI for resume parsing instead of OpenAI, as it was cost-effective for this task.
+import { GoogleGenAI } from "@google/genai";
 // Import from lib directly to avoid pdf-parse's index.js debug mode, which reads
 // a test file on every require() call and crashes when module.parent is null
 // (always the case under Next.js/Turbopack).
@@ -254,6 +257,8 @@ export async function extractProfile(): Promise<{
       };
     }
 
+    // Removed OpenAI
+    /**
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
 
     const response = await openai.chat.completions.create({
@@ -293,11 +298,53 @@ ${extractedText.slice(0, 6000)}`,
     });
 
     const raw = response.choices[0].message.content;
+
+    **/
+
+    // Use Google GenAI for resume parsing instead of OpenAI, as it was cost-effective for this task.
+
+    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: `You are a resume parser. Extract structured profile data from the resume text and return only valid JSON matching the exact schema provided. Use null for missing fields. Arrays must always be arrays (never null). experience_level must be one of: Junior, Mid-Level, Senior, Lead, Manager, Director, Executive — pick the closest match or null.
+Extract profile data from this resume and return JSON with this exact shape:
+{
+  "full_name": string | null,
+  "phone": string | null,
+  "location": string | null,
+  "current_title": string | null,
+  "experience_level": "Junior"|"Mid-Level"|"Senior"|"Lead"|"Manager"|"Director"|"Executive"|null,
+  "years_experience": number | null,
+  "skills": string[],
+  "industries": string[],
+  "work_experience": [{ "company": string, "title": string, "start_date": string, "end_date": string|null, "is_current": boolean, "responsibilities": string }],
+  "education": { "degree": string|null, "field": string|null, "institution": string|null, "graduation_year": string|null },
+  "job_titles_seeking": string[],
+  "linkedin_url": string|null,
+  "portfolio_url": string|null
+}
+
+Resume text:
+${extractedText.slice(0, 6000)}`,
+      config: {
+        responseMimeType: "application/json",
+        temperature: 0.2,
+        maxOutputTokens: 4000,
+      },
+    });
+
+    const raw = response.text;
     if (!raw) {
       return { success: false, error: "AI returned an empty response." };
     }
 
-    const extracted = JSON.parse(raw) as ExtractedProfile;
+    const cleanRaw = raw
+      .replace(/^```json\s*/i, "") // Removes opening ```json
+      .replace(/^```\s*/i, "")     // Removes opening ``` if it didn't specify json
+      .replace(/\s*```$/, "")      // Removes closing ```
+      .trim();
+
+    const extracted = JSON.parse(cleanRaw) as ExtractedProfile;
 
     return { success: true, data: extracted };
   } catch (error) {
